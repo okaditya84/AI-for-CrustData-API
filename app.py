@@ -1,119 +1,208 @@
 import streamlit as st
-import os
-from typing import List, Dict, Optional
-from dataclasses import dataclass
 import groq
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
-from langchain.memory import ConversationBufferMemory
-from langchain.chains import ConversationalRetrievalChain
-from langchain_groq import ChatGroq
+import json
+from typing import List, Dict, Optional, Tuple
+from dataclasses import dataclass
 import time
+import re
+from collections import deque
+import numpy as np
+from concurrent.futures import ThreadPoolExecutor
+
+@dataclass
+class DocumentChunk:
+    """Represents a semantic chunk of documentation"""
+    content: str
+    embedding: Optional[np.ndarray] = None
+    metadata: Dict = None
 
 @dataclass
 class Message:
-    """Data class for chat messages"""
+    """Represents a chat message with enhanced metadata"""
     role: str
     content: str
     timestamp: float = time.time()
+    metadata: Dict = None
+
+class SemanticChunker:
+    """Intelligent document chunking without external dependencies"""
+    
+    def __init__(self, max_chunk_size: int = 1000):
+        self.max_chunk_size = max_chunk_size
+        
+    def split_text(self, text: str) -> List[str]:
+        """Split text into semantic chunks using rule-based approach"""
+        # Split on major section boundaries
+        sections = re.split(r'\n\s*#{1,3}\s+', text)
+        
+        chunks = []
+        current_chunk = []
+        current_length = 0
+        
+        for section in sections:
+            # Split into paragraphs
+            paragraphs = section.split('\n\n')
+            
+            for paragraph in paragraphs:
+                if current_length + len(paragraph) > self.max_chunk_size:
+                    if current_chunk:
+                        chunks.append('\n\n'.join(current_chunk))
+                        current_chunk = []
+                        current_length = 0
+                
+                current_chunk.append(paragraph)
+                current_length += len(paragraph)
+        
+        if current_chunk:
+            chunks.append('\n\n'.join(current_chunk))
+            
+        return chunks
+
+class DocumentStore:
+    """In-memory vector store implementation"""
+    
+    def __init__(self):
+        self.documents: List[DocumentChunk] = []
+        self.index: Dict[str, List[int]] = {}
+        
+    def add_documents(self, chunks: List[str]):
+        """Add documents to the store with basic indexing"""
+        for chunk in chunks:
+            doc = DocumentChunk(content=chunk)
+            self.documents.append(doc)
+            
+            # Create inverted index for key terms
+            terms = set(re.findall(r'\w+', chunk.lower()))
+            for term in terms:
+                if term not in self.index:
+                    self.index[term] = []
+                self.index[term].append(len(self.documents) - 1)
+    
+    def search(self, query: str, top_k: int = 3) -> List[str]:
+        """Search for relevant documents using TF-IDF-like scoring"""
+        query_terms = set(re.findall(r'\w+', query.lower()))
+        scores = []
+        
+        for idx, doc in enumerate(self.documents):
+            score = 0
+            doc_terms = set(re.findall(r'\w+', doc.content.lower()))
+            common_terms = query_terms & doc_terms
+            
+            if common_terms:
+                score = len(common_terms) / (len(query_terms) * len(doc_terms)) ** 0.5
+            scores.append((idx, score))
+        
+        # Get top_k documents
+        top_docs = sorted(scores, key=lambda x: x[1], reverse=True)[:top_k]
+        return [self.documents[idx].content for idx, _ in top_docs]
 
 class CrustdataSupport:
-    def __init__(self, groq_api_key: str):
-        """Initialize the support chatbot with necessary components"""
-        self.groq_api_key = groq_api_key
-        self.messages: List[Message] = []
-        self.setup_llm()
-        self.setup_knowledge_base()
-        self.setup_memory()
-        
-    def setup_llm(self):
-        """Configure LLaMA model through Groq"""
-        self.llm = ChatGroq(
-            groq_api_key=self.groq_api_key,
-            model_name="llama2-70b-4096",
-            temperature=0.2,
-            max_tokens=4096
-        )
+    """Advanced Crustdata API support system"""
     
-    def setup_knowledge_base(self):
-        """Initialize and configure the vector store for API documentation"""
-        # Initialize text splitter for processing documentation
-        self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200,
-            separators=["\n\n", "\n", " ", ""]
-        )
+    def __init__(self, groq_api_key: str):
+        self.groq_api_key = groq_api_key
+        self.client = groq.Groq(api_key=groq_api_key)
+        self.messages: deque = deque(maxlen=100)  # Limit conversation history
+        self.chunker = SemanticChunker()
+        self.doc_store = DocumentStore()
+        self.load_documentation()
+    
+    def load_documentation(self):
+        """Load and process API documentation"""
+        # Discovery and Enrichment API Documentation
+        discovery_api_docs = """
+        # Crustdata Discovery And Enrichment API
         
-        # Initialize embeddings model
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
-        )
+        ## Overview
+        The Discovery API allows you to search and discover companies.
+        The Enrichment API provides detailed company information.
         
-        # Create vector store from documentation
-        self.knowledge_base = self.create_vector_store()
+        ## Endpoints
         
-    def create_vector_store(self) -> FAISS:
-        """Create and return a vector store from the API documentation"""
-        # This is where you'll add the actual API documentation
-        api_docs = """
-        [Your API documentation content here]
+        ### GET /api/v1/companies/search
+        Search for companies using various filters.
         
-        Example endpoints:
-        1. Discovery API
-        2. Enrichment API
-        3. Dataset API
+        Parameters:
+        - query: Search query string
+        - filters: Optional filtering criteria
         
-        Include detailed documentation about endpoints, parameters, and example responses
+        ### GET /api/v1/companies/{company_id}/enrich
+        Get enriched data for a specific company.
+        
+        Parameters:
+        - company_id: Unique identifier for the company
         """
         
-        # Split text into chunks
-        chunks = self.text_splitter.split_text(api_docs)
+        # Dataset API Documentation
+        dataset_api_docs = """
+        # Crustdata Dataset API
         
-        # Create and return vector store
-        return FAISS.from_texts(chunks, self.embeddings)
-    
-    def setup_memory(self):
-        """Initialize conversation memory"""
-        self.memory = ConversationBufferMemory(
-            memory_key="chat_history",
-            return_messages=True,
-            output_key="answer"
-        )
+        ## Overview
+        Access and manage datasets through our comprehensive API.
         
-        # Create retrieval chain
-        self.chain = ConversationalRetrievalChain.from_llm(
-            llm=self.llm,
-            retriever=self.knowledge_base.as_retriever(),
-            memory=self.memory,
-            return_source_documents=True
-        )
+        ## Endpoints
+        
+        ### GET /api/v1/datasets
+        List available datasets.
+        
+        ### GET /api/v1/datasets/{dataset_id}
+        Get details of a specific dataset.
+        
+        Parameters:
+        - dataset_id: Unique identifier for the dataset
+        """
+        
+        # Process and store documentation
+        all_docs = [discovery_api_docs, dataset_api_docs]
+        for doc in all_docs:
+            chunks = self.chunker.split_text(doc)
+            self.doc_store.add_documents(chunks)
     
     def get_response(self, user_message: str) -> str:
-        """Generate a response to the user's message"""
+        """Generate response using context-aware processing"""
         try:
-            # Add system context for better responses
-            system_prompt = """You are a helpful and knowledgeable technical support agent for Crustdata's APIs. 
-            Your responses should be accurate, clear, and focused on helping users understand and effectively use the APIs.
-            Include relevant code examples when appropriate."""
+            # Get relevant documentation chunks
+            relevant_docs = self.doc_store.search(user_message)
             
-            # Get response from chain
-            response = self.chain({"question": user_message, "system": system_prompt})
+            # Construct prompt with context
+            context = "\n\n".join(relevant_docs)
+            prompt = f"""You are a specialized technical support agent for Crustdata's APIs.
+            Use the following documentation context to answer the user's question:
             
-            # Add messages to history
+            {context}
+            
+            User Question: {user_message}
+            
+            Provide a clear, accurate response with specific examples when relevant."""
+            
+            # Get response from Groq
+            chat_completion = self.client.chat.completions.create(
+                messages=[{"role": "system", "content": prompt}],
+                model="llama-3.3-70b-versatile",
+                temperature=0.4,
+                max_tokens=4098
+            )
+            
+            response = chat_completion.choices[0].message.content
+            
+            # Store messages
             self.messages.append(Message(role="user", content=user_message))
-            self.messages.append(Message(role="assistant", content=response["answer"]))
+            self.messages.append(Message(role="assistant", content=response))
             
-            return response["answer"]
+            return response
             
         except Exception as e:
-            error_message = f"An error occurred: {str(e)}"
-            self.messages.append(Message(role="error", content=error_message))
-            return error_message
+            error_msg = f"An error occurred: {str(e)}"
+            self.messages.append(Message(role="error", content=error_msg))
+            return error_msg
 
-# Streamlit UI
 def create_streamlit_ui():
-    st.set_page_config(page_title="Crustdata API Support", layout="wide")
+    """Create the Streamlit user interface"""
+    st.set_page_config(
+        page_title="Crustdata API Support",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
     
     # Initialize session state
     if "support_agent" not in st.session_state:
@@ -122,25 +211,53 @@ def create_streamlit_ui():
     
     st.title("Crustdata API Support")
     
-    # Chat interface
+    # Sidebar with API documentation overview
+    with st.sidebar:
+        st.header("API Documentation")
+        st.markdown("""
+        ### Available APIs
+        - Discovery API
+        - Enrichment API
+        - Dataset API
+        
+        Ask questions about endpoints, parameters, and usage!
+        """)
+    
+    # Main chat interface
     st.markdown("### Chat with our API Support Agent")
     
-    # Display chat messages
-    for message in st.session_state.support_agent.messages:
-        if message.role == "user":
-            st.markdown(f"**You:** {message.content}")
-        elif message.role == "assistant":
-            st.markdown(f"**Support Agent:** {message.content}")
-        else:
-            st.error(message.content)
+    # Message container with custom styling
+    message_container = st.container()
     
-    # User input
-    user_input = st.text_input("Ask a question about Crustdata's APIs:", key="user_input")
+    with message_container:
+        for msg in st.session_state.support_agent.messages:
+            if msg.role == "user":
+                st.markdown(f"🧑 **You:** {msg.content}")
+            elif msg.role == "assistant":
+                st.markdown(f"🤖 **Support Agent:** {msg.content}")
+            else:
+                st.error(msg.content)
     
-    if st.button("Send"):
-        if user_input:
-            response = st.session_state.support_agent.get_response(user_input)
-            st.experimental_rerun()
+    # User input area
+    st.markdown("---")
+    user_input = st.text_input(
+        "Ask a question about Crustdata's APIs:",
+        key="user_input",
+        placeholder="e.g., How do I use the company search endpoint?"
+    )
+    
+    col1, col2 = st.columns([1, 4])
+    
+    with col1:
+        if st.button("Send", use_container_width=True):
+            if user_input:
+                response = st.session_state.support_agent.get_response(user_input)
+                st.rerun()
+    
+    with col2:
+        if st.button("Clear Chat", use_container_width=True):
+            st.session_state.support_agent.messages.clear()
+            st.rerun()
 
 if __name__ == "__main__":
     create_streamlit_ui()
