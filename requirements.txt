@@ -1,6 +1,6 @@
 streamlit 
 langchain 
-groq-sdk 
+groq
 faiss-cpu 
 sentence-transformers
 langchain-groq
