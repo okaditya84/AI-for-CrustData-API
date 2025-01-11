@@ -1,263 +1,128 @@
+import os
 import streamlit as st
-import groq
-import json
-from typing import List, Dict, Optional, Tuple
-from dataclasses import dataclass
-import time
-import re
-from collections import deque
-import numpy as np
-from concurrent.futures import ThreadPoolExecutor
+from langchain.chains import LLMChain
+from langchain.prompts import ChatPromptTemplate, HumanMessagePromptTemplate, MessagesPlaceholder
+from langchain_core.messages import SystemMessage
+from langchain.chains.conversation.memory import ConversationBufferWindowMemory
+from langchain_groq import ChatGroq
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.schema import Document
+from langchain.vectorstores import FAISS
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
-@dataclass
-class DocumentChunk:
-    """Represents a semantic chunk of documentation"""
-    content: str
-    embedding: Optional[np.ndarray] = None
-    metadata: Dict = None
 
-@dataclass
-class Message:
-    """Represents a chat message with enhanced metadata"""
-    role: str
-    content: str
-    timestamp: float = time.time()
-    metadata: Dict = None
+TEXT_FILES_FOLDER = "text_files"  # Folder containing text files
+VECTOR_STORE_PATH = "vectorstore"  # Path to save/load the vector store
 
-class SemanticChunker:
-    """Intelligent document chunking without external dependencies"""
-    
-    def __init__(self, max_chunk_size: int = 1000):
-        self.max_chunk_size = max_chunk_size
-        
-    def split_text(self, text: str) -> List[str]:
-        """Split text into semantic chunks using rule-based approach"""
-        # Split on major section boundaries
-        sections = re.split(r'\n\s*#{1,3}\s+', text)
-        
-        chunks = []
-        current_chunk = []
-        current_length = 0
-        
-        for section in sections:
-            # Split into paragraphs
-            paragraphs = section.split('\n\n')
-            
-            for paragraph in paragraphs:
-                if current_length + len(paragraph) > self.max_chunk_size:
-                    if current_chunk:
-                        chunks.append('\n\n'.join(current_chunk))
-                        current_chunk = []
-                        current_length = 0
-                
-                current_chunk.append(paragraph)
-                current_length += len(paragraph)
-        
-        if current_chunk:
-            chunks.append('\n\n'.join(current_chunk))
-            
-        return chunks
 
-class DocumentStore:
-    """In-memory vector store implementation"""
-    
-    def __init__(self):
-        self.documents: List[DocumentChunk] = []
-        self.index: Dict[str, List[int]] = {}
-        
-    def add_documents(self, chunks: List[str]):
-        """Add documents to the store with basic indexing"""
-        for chunk in chunks:
-            doc = DocumentChunk(content=chunk)
-            self.documents.append(doc)
-            
-            # Create inverted index for key terms
-            terms = set(re.findall(r'\w+', chunk.lower()))
-            for term in terms:
-                if term not in self.index:
-                    self.index[term] = []
-                self.index[term].append(len(self.documents) - 1)
-    
-    def search(self, query: str, top_k: int = 3) -> List[str]:
-        """Search for relevant documents using TF-IDF-like scoring"""
-        query_terms = set(re.findall(r'\w+', query.lower()))
-        scores = []
-        
-        for idx, doc in enumerate(self.documents):
-            score = 0
-            doc_terms = set(re.findall(r'\w+', doc.content.lower()))
-            common_terms = query_terms & doc_terms
-            
-            if common_terms:
-                score = len(common_terms) / (len(query_terms) * len(doc_terms)) ** 0.5
-            scores.append((idx, score))
-        
-        # Get top_k documents
-        top_docs = sorted(scores, key=lambda x: x[1], reverse=True)[:top_k]
-        return [self.documents[idx].content for idx, _ in top_docs]
+def main():
+    """
+    This function initializes the Groq chatbot and integrates text file-based Q&A.
+    """
+    # Set up Groq API key
+    groq_api_key = os.environ['GROQ_API_KEY']
 
-class CrustdataSupport:
-    """Advanced Crustdata API support system"""
-    
-    def __init__(self, groq_api_key: str):
-        self.groq_api_key = groq_api_key
-        self.client = groq.Groq(api_key=groq_api_key)
-        self.messages: deque = deque(maxlen=100)  # Limit conversation history
-        self.chunker = SemanticChunker()
-        self.doc_store = DocumentStore()
-        self.load_documentation()
-    
-    def load_documentation(self):
-        """Load and process API documentation"""
-        # Discovery and Enrichment API Documentation
-        discovery_api_docs = """
-        # Crustdata Discovery And Enrichment API
-        
-        ## Overview
-        The Discovery API allows you to search and discover companies.
-        The Enrichment API provides detailed company information.
-        
-        ## Endpoints
-        
-        ### GET /api/v1/companies/search
-        Search for companies using various filters.
-        
-        Parameters:
-        - query: Search query string
-        - filters: Optional filtering criteria
-        
-        ### GET /api/v1/companies/{company_id}/enrich
-        Get enriched data for a specific company.
-        
-        Parameters:
-        - company_id: Unique identifier for the company
-        """
-        
-        # Dataset API Documentation
-        dataset_api_docs = """
-        # Crustdata Dataset API
-        
-        ## Overview
-        Access and manage datasets through our comprehensive API.
-        
-        ## Endpoints
-        
-        ### GET /api/v1/datasets
-        List available datasets.
-        
-        ### GET /api/v1/datasets/{dataset_id}
-        Get details of a specific dataset.
-        
-        Parameters:
-        - dataset_id: Unique identifier for the dataset
-        """
-        
-        # Process and store documentation
-        all_docs = [discovery_api_docs, dataset_api_docs]
-        for doc in all_docs:
-            chunks = self.chunker.split_text(doc)
-            self.doc_store.add_documents(chunks)
-    
-    def get_response(self, user_message: str) -> str:
-        """Generate response using context-aware processing"""
-        try:
-            # Get relevant documentation chunks
-            relevant_docs = self.doc_store.search(user_message)
-            
-            # Construct prompt with context
-            context = "\n\n".join(relevant_docs)
-            prompt = f"""You are a specialized technical support agent for Crustdata's APIs.
-            Use the following documentation context to answer the user's question:
-            
-            {context}
-            
-            User Question: {user_message}
-            
-            Provide a clear, accurate response with specific examples when relevant."""
-            
-            # Get response from Groq
-            chat_completion = self.client.chat.completions.create(
-                messages=[{"role": "system", "content": prompt}],
-                model="llama-3.3-70b-versatile",
-                temperature=0.4,
-                max_tokens=4098
-            )
-            
-            response = chat_completion.choices[0].message.content
-            
-            # Store messages
-            self.messages.append(Message(role="user", content=user_message))
-            self.messages.append(Message(role="assistant", content=response))
-            
-            return response
-            
-        except Exception as e:
-            error_msg = f"An error occurred: {str(e)}"
-            self.messages.append(Message(role="error", content=error_msg))
-            return error_msg
+    # Streamlit app interface
+    st.title("Customer Support Chatbot")
+    st.write("Interact with the Crustdata customer support chatbot!")
 
-def create_streamlit_ui():
-    """Create the Streamlit user interface"""
-    st.set_page_config(
-        page_title="Crustdata API Support",
-        layout="wide",
-        initial_sidebar_state="expanded"
+    st.sidebar.title('Customization')
+    system_prompt = st.sidebar.text_input("System prompt:", value="You are a helpful customer support agent.")
+    model = st.sidebar.selectbox('Choose a model', ['llama-3.3-70b-versatile'])
+    conversational_memory_length = st.sidebar.slider('Conversational memory length:', 1, 10, value=5)
+
+    memory = ConversationBufferWindowMemory(
+    k=conversational_memory_length,
+    memory_key="chat_history",
+    return_messages=True,
+    input_key="human_input"  # Specify the input key for memory
+)
+
+    user_question = st.text_input("Ask a question:")
+    submit_button = st.button("Submit")
+
+    # Session state for chat history
+    if 'chat_history' not in st.session_state:
+        st.session_state.chat_history = []
+    else:
+        for message in st.session_state.chat_history:
+            memory.save_context({'input': message['human']}, {'output': message['AI']})
+
+    # Load or create the vector store
+    retriever = load_or_create_retriever()
+    if retriever is None:
+        st.error("No data found in the text files folder. Please add text files and try again.")
+        return
+    st.sidebar.success("Vector store loaded successfully!")
+
+    # Initialize Groq LangChain chat object
+    groq_chat = ChatGroq(
+        groq_api_key=groq_api_key,
+        model_name=model
     )
-    
-    # Initialize session state
-    if "support_agent" not in st.session_state:
-        groq_api_key = st.secrets["GROQ_API_KEY"]
-        st.session_state.support_agent = CrustdataSupport(groq_api_key)
-    
-    st.title("Crustdata API Support")
-    
-    # Sidebar with API documentation overview
-    with st.sidebar:
-        st.header("API Documentation")
-        st.markdown("""
-        ### Available APIs
-        - Discovery API
-        - Enrichment API
-        - Dataset API
-        
-        Ask questions about endpoints, parameters, and usage!
-        """)
-    
-    # Main chat interface
-    st.markdown("### Chat with our API Support Agent")
-    
-    # Message container with custom styling
-    message_container = st.container()
-    
-    with message_container:
-        for msg in st.session_state.support_agent.messages:
-            if msg.role == "user":
-                st.markdown(f"🧑 **You:** {msg.content}")
-            elif msg.role == "assistant":
-                st.markdown(f"🤖 **Support Agent:** {msg.content}")
-            else:
-                st.error(msg.content)
-    
-    # User input area
-    st.markdown("---")
-    user_input = st.text_input(
-        "Ask a question about Crustdata's APIs:",
-        key="user_input",
-        placeholder="e.g., How do I use the company search endpoint?"
-    )
-    
-    col1, col2 = st.columns([1, 4])
-    
-    with col1:
-        if st.button("Send", use_container_width=True):
-            if user_input:
-                response = st.session_state.support_agent.get_response(user_input)
-                st.rerun()
-    
-    with col2:
-        if st.button("Clear Chat", use_container_width=True):
-            st.session_state.support_agent.messages.clear()
-            st.rerun()
+
+    if user_question and submit_button:
+        # Use retriever for context
+        related_docs = retriever.get_relevant_documents(user_question)
+        context = "\n".join([doc.page_content for doc in related_docs])
+
+        # Construct prompt template
+        prompt = ChatPromptTemplate.from_messages([
+            SystemMessage(content=system_prompt),
+            MessagesPlaceholder(variable_name="chat_history"),
+            HumanMessagePromptTemplate.from_template("{human_input}\nContext:\n{context}"),
+        ])
+
+        # Create conversation chain
+        conversation = LLMChain(
+            llm=groq_chat,
+            prompt=prompt,
+            verbose=True,
+            memory=memory,
+        )
+
+        # Get response
+        response = conversation.predict(human_input=user_question, context=context)
+        message = {'human': user_question, 'AI': response}
+        st.session_state.chat_history.append(message)
+        st.write("Chatbot:", response)
+
+
+def load_or_create_retriever():
+    """
+    Load the vector store if it exists, otherwise create it from text files.
+    """
+    if os.path.exists(VECTOR_STORE_PATH):
+        # Load existing vector store
+        vectorstore = FAISS.load_local(VECTOR_STORE_PATH, GoogleGenerativeAIEmbeddings(model="models/embedding-001"), allow_dangerous_deserialization=True)
+        return vectorstore.as_retriever()
+    else:
+        # Create vector store from text files
+        docs = load_text_files(TEXT_FILES_FOLDER)
+        if docs:
+            embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+            vectorstore = FAISS.from_documents(docs, embeddings)
+            vectorstore.save_local(VECTOR_STORE_PATH)
+            return vectorstore.as_retriever()
+        else:
+            return None
+
+
+def load_text_files(folder_path):
+    """
+    Load and process text files into LangChain Document objects.
+    """
+    docs = []
+    for filename in os.listdir(folder_path):
+        if filename.endswith(".txt"):
+            with open(os.path.join(folder_path, filename), "r", encoding="utf-8") as file:
+                text = file.read()
+                docs.append(Document(page_content=text, metadata={"source": filename}))
+
+    # Split large documents into manageable chunks
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    return text_splitter.split_documents(docs)
+
 
 if __name__ == "__main__":
-    create_streamlit_ui()
+    main()

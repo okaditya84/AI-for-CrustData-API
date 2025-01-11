@@ -5,3 +5,7 @@ faiss-cpu
 sentence-transformers
 langchain-groq
 langchain-community
+beautifulsoup4
+chromadb
+json5
+playwright
