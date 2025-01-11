@@ -1,0 +1,7 @@
+streamlit 
+langchain 
+groq-sdk 
+faiss-cpu 
+sentence-transformers
+langchain-groq
+langchain-community
