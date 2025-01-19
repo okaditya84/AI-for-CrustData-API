@@ -39,7 +39,6 @@ class CrustdataBot:
         )
 
     def _initialize_retriever(self):
-        """Initialize or load the vector store retriever with enhanced error handling."""
         try:
             if os.path.exists(VECTOR_STORE_PATH):
                 vectorstore = FAISS.load_local(
@@ -61,7 +60,6 @@ class CrustdataBot:
             return None
 
     def _initialize_llm(self) -> ChatGroq:
-        """Initialize the Groq LLM."""
         return ChatGroq(
             groq_api_key=self.groq_api_key,
             model_name=MODEL_NAME,
@@ -99,7 +97,6 @@ If you're unsure about any details, acknowledge the uncertainty and suggest wher
         )
 
     def _load_and_process_documents(self) -> List[Document]:
-        """Load and process documents with text splitting."""
         docs = []
         for filename in os.listdir(TEXT_FILES_FOLDER):
             if filename.endswith(".txt"):
@@ -108,7 +105,6 @@ If you're unsure about any details, acknowledge the uncertainty and suggest wher
                     docs.append(
                         Document(page_content=text, metadata={"source": filename, "type": "api_documentation"})
                     )
-
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=CHUNK_SIZE,
             chunk_overlap=CHUNK_OVERLAP,
@@ -117,7 +113,6 @@ If you're unsure about any details, acknowledge the uncertainty and suggest wher
         return text_splitter.split_documents(docs)
 
     def get_response(self, question: str) -> str:
-        """Generate a validated response with error-handling and context retrieval."""
         try:
             relevant_docs = self.retriever.get_relevant_documents(question)
             context = self._process_relevant_documents(relevant_docs)
@@ -141,7 +136,6 @@ If you're unsure about any details, acknowledge the uncertainty and suggest wher
         return response
 
     def _validate_api_requests_in_response(self, response: str) -> str:
-        """Checks for code samples with curl and proposes minimal fixes if needed."""
         curl_pattern = re.compile(r"```bash\s*(curl[^\n]+)\s*```", re.IGNORECASE | re.DOTALL)
         matches = curl_pattern.findall(response)
         fixed_response = response
@@ -153,26 +147,25 @@ If you're unsure about any details, acknowledge the uncertainty and suggest wher
         return fixed_response
 
 def main():
-    st.title("Crustdata API Support Assistant")
-    st.write("Ask questions about Crustdata's APIs and get validated technical answers!")
+    st.set_page_config(page_title="Crustdata Chat Support", layout="centered")
+    st.title("Crustdata API Support - Chat Mode")
 
     bot = CrustdataBot()
 
     if 'chat_history' not in st.session_state:
         st.session_state.chat_history = []
 
-    user_question = st.text_input("Ask a technical question about Crustdata's APIs:")
-    if st.button("Submit"):
-        if not user_question:
-            st.warning("Please enter a question.")
-            return
+    user_input = st.chat_input("Ask something about Crustdata's APIs...")
+    if user_input:
+        response = bot.get_response(user_input)
+        st.session_state.chat_history.append(("user", user_input))
+        st.session_state.chat_history.append(("assistant", response))
 
-        response = bot.get_response(user_question)
-        st.session_state.chat_history.append({'human': user_question, 'AI': response})
-
-    for message in st.session_state.chat_history:
-        st.write("You:", message['human'])
-        st.markdown(message['AI'])
+    for role, content in st.session_state.chat_history:
+        if role == "user":
+            st.chat_message("user").write(content)
+        else:
+            st.chat_message("assistant").write(content)
 
 if __name__ == "__main__":
     main()
