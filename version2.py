@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import streamlit as st
 from langchain.chains import LLMChain
 from langchain.prompts import ChatPromptTemplate, HumanMessagePromptTemplate, MessagesPlaceholder
@@ -10,8 +11,7 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
 from langchain.vectorstores import FAISS
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from typing import List, Dict
-import json
+from typing import List
 
 # Constants
 TEXT_FILES_FOLDER = "text_files"
@@ -21,6 +21,7 @@ MODEL_NAME = "llama-3.3-70b-versatile"
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 200
 MEMORY_WINDOW = 5
+CHAT_LOG_FILE = "old_chat_sessions.json"
 
 class CrustdataBot:
     def __init__(self):
@@ -29,7 +30,7 @@ class CrustdataBot:
         self.retriever = self._initialize_retriever()
         self.llm = self._initialize_llm()
         self.conversation_chain = self._create_conversation_chain()
-    
+
     def _initialize_memory(self) -> ConversationBufferMemory:
         return ConversationBufferMemory(
             k=MEMORY_WINDOW,
@@ -53,7 +54,6 @@ class CrustdataBot:
                 embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
                 vectorstore = FAISS.from_documents(docs, embeddings)
                 vectorstore.save_local(VECTOR_STORE_PATH)
-            
             return vectorstore.as_retriever(search_kwargs={"k": 3})
         except Exception as e:
             st.error(f"Error initializing retriever: {str(e)}")
@@ -102,9 +102,7 @@ If you're unsure about any details, acknowledge the uncertainty and suggest wher
             if filename.endswith(".txt"):
                 with open(os.path.join(TEXT_FILES_FOLDER, filename), "r", encoding="utf-8") as file:
                     text = file.read()
-                    docs.append(
-                        Document(page_content=text, metadata={"source": filename, "type": "api_documentation"})
-                    )
+                    docs.append(Document(page_content=text, metadata={"source": filename, "type": "api_documentation"}))
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=CHUNK_SIZE,
             chunk_overlap=CHUNK_OVERLAP,
@@ -146,6 +144,19 @@ If you're unsure about any details, acknowledge the uncertainty and suggest wher
                 fixed_response = fixed_response.replace(f"```bash\n{match}\n```", fixed_snippet)
         return fixed_response
 
+def store_chat_history(chat_history):
+    if not chat_history:
+        return
+    record = {"conversation": chat_history}
+    if os.path.exists(CHAT_LOG_FILE):
+        with open(CHAT_LOG_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    else:
+        data = []
+    data.append(record)
+    with open(CHAT_LOG_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
 def main():
     st.set_page_config(page_title="Crustdata Chat Support", layout="centered")
     st.title("Crustdata API Support - Chat Mode")
@@ -155,6 +166,17 @@ def main():
     if 'chat_history' not in st.session_state:
         st.session_state.chat_history = []
 
+    # Buttons for new features
+    if st.button("Clear Chat History"):
+        store_chat_history(st.session_state.chat_history)
+        st.session_state.chat_history = []
+
+    if st.button("Start New Chat"):
+        store_chat_history(st.session_state.chat_history)
+        st.session_state.chat_history = []
+        # Optionally re-initialize bot if needed
+        bot.memory.clear()
+
     user_input = st.chat_input("Ask something about Crustdata's APIs...")
     if user_input:
         response = bot.get_response(user_input)
@@ -162,10 +184,7 @@ def main():
         st.session_state.chat_history.append(("assistant", response))
 
     for role, content in st.session_state.chat_history:
-        if role == "user":
-            st.chat_message("user").write(content)
-        else:
-            st.chat_message("assistant").write(content)
+        st.chat_message(role).write(content)
 
 if __name__ == "__main__":
     main()
