@@ -1,4 +1,5 @@
 import os
+import re
 import streamlit as st
 from langchain.chains import LLMChain
 from langchain.prompts import ChatPromptTemplate, HumanMessagePromptTemplate, MessagesPlaceholder
@@ -28,7 +29,7 @@ class CrustdataBot:
         self.retriever = self._initialize_retriever()
         self.llm = self._initialize_llm()
         self.conversation_chain = self._create_conversation_chain()
-
+    
     def _initialize_memory(self) -> ConversationBufferMemory:
         return ConversationBufferMemory(
             k=MEMORY_WINDOW,
@@ -38,7 +39,7 @@ class CrustdataBot:
         )
 
     def _initialize_retriever(self):
-        """Initialize or load the vector store retriever with enhanced error handling"""
+        """Initialize or load the vector store retriever with enhanced error handling."""
         try:
             if os.path.exists(VECTOR_STORE_PATH):
                 vectorstore = FAISS.load_local(
@@ -54,19 +55,17 @@ class CrustdataBot:
                 vectorstore = FAISS.from_documents(docs, embeddings)
                 vectorstore.save_local(VECTOR_STORE_PATH)
             
-            return vectorstore.as_retriever(
-                search_kwargs={"k": 3}  # Retrieve top 3 most relevant chunks
-            )
+            return vectorstore.as_retriever(search_kwargs={"k": 3})
         except Exception as e:
             st.error(f"Error initializing retriever: {str(e)}")
             return None
 
     def _initialize_llm(self) -> ChatGroq:
-        """Initialize the Groq LLM with optimized parameters"""
+        """Initialize the Groq LLM."""
         return ChatGroq(
             groq_api_key=self.groq_api_key,
             model_name=MODEL_NAME,
-            temperature=0.3,  # Lower temperature for more precise responses
+            temperature=0.3,
             max_tokens=1000,
             top_p=0.9
         )
@@ -79,12 +78,7 @@ class CrustdataBot:
 4. Explain any limitations or requirements clearly.
 5. Suggest workarounds for common issues based on the documentation.
 6. Use consistent formatting for API endpoints and parameters.
-
-When providing code examples, always include:
-- Complete curl commands
-- Required headers
-- Proper JSON formatting
-- Comments explaining key parameters
+7. If any API request example is provided, validate it before returning to the user. If there's an error, suggest a fix based on logs or known usage.
 
 If you're unsure about any details, acknowledge the uncertainty and suggest where to find more information in the documentation."""
 
@@ -93,7 +87,7 @@ If you're unsure about any details, acknowledge the uncertainty and suggest wher
             MessagesPlaceholder(variable_name=MEMORY_KEY),
             HumanMessagePromptTemplate.from_template(
                 "Question: {human_input}\n\nRelevant Documentation:\n{context}\n\n"
-                "Please provide a detailed, technical response focusing on Crustdata's API usage. You have to stick to the API documentation and provide accurate information with to-the-point precise content."
+                "Provide a technical answer focusing on Crustdata's API usage. Validate any API request snippet."
             ),
         ])
 
@@ -105,16 +99,15 @@ If you're unsure about any details, acknowledge the uncertainty and suggest wher
         )
 
     def _load_and_process_documents(self) -> List[Document]:
-        """Load and process documents with enhanced text splitting"""
+        """Load and process documents with text splitting."""
         docs = []
         for filename in os.listdir(TEXT_FILES_FOLDER):
             if filename.endswith(".txt"):
                 with open(os.path.join(TEXT_FILES_FOLDER, filename), "r", encoding="utf-8") as file:
                     text = file.read()
-                    docs.append(Document(
-                        page_content=text,
-                        metadata={"source": filename, "type": "api_documentation"}
-                    ))
+                    docs.append(
+                        Document(page_content=text, metadata={"source": filename, "type": "api_documentation"})
+                    )
 
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=CHUNK_SIZE,
@@ -124,22 +117,17 @@ If you're unsure about any details, acknowledge the uncertainty and suggest wher
         return text_splitter.split_documents(docs)
 
     def get_response(self, question: str) -> str:
-        """Generate a response with enhanced context retrieval"""
+        """Generate a validated response with error-handling and context retrieval."""
         try:
             relevant_docs = self.retriever.get_relevant_documents(question)
             context = self._process_relevant_documents(relevant_docs)
-            
-            response = self.conversation_chain.predict(
-                human_input=question,
-                context=context
-            )
-            
+            response = self.conversation_chain.predict(human_input=question, context=context)
+            response = self._validate_api_requests_in_response(response)
             return self._format_response(response)
         except Exception as e:
             return f"I apologize, but I encountered an error: {str(e)}. Please try rephrasing your question."
 
     def _process_relevant_documents(self, docs: List[Document]) -> str:
-        """Process and prioritize relevant documentation chunks"""
         processed_chunks = []
         for doc in docs:
             chunk = doc.page_content.strip()
@@ -148,24 +136,31 @@ If you're unsure about any details, acknowledge the uncertainty and suggest wher
         return "\n\n---\n\n".join(processed_chunks)
 
     def _format_response(self, response: str) -> str:
-        """Format the response for better readability"""
-        # Add markdown formatting for code blocks and API endpoints
         response = response.replace("```curl", "```bash")
         response = response.replace("api.crustdata.com", "`api.crustdata.com`")
         return response
 
+    def _validate_api_requests_in_response(self, response: str) -> str:
+        """Checks for code samples with curl and proposes minimal fixes if needed."""
+        curl_pattern = re.compile(r"```bash\s*(curl[^\n]+)\s*```", re.IGNORECASE | re.DOTALL)
+        matches = curl_pattern.findall(response)
+        fixed_response = response
+        for match in matches:
+            if "api.crustdata.com" not in match:
+                correction = match.replace("curl ", "curl https://api.crustdata.com ")
+                fixed_snippet = f"```bash\n{correction}\n```"
+                fixed_response = fixed_response.replace(f"```bash\n{match}\n```", fixed_snippet)
+        return fixed_response
+
 def main():
     st.title("Crustdata API Support Assistant")
-    st.write("Ask questions about Crustdata's APIs and get detailed technical answers!")
+    st.write("Ask questions about Crustdata's APIs and get validated technical answers!")
 
-    # Initialize bot
     bot = CrustdataBot()
 
-    # Initialize session state
     if 'chat_history' not in st.session_state:
         st.session_state.chat_history = []
 
-    # Chat interface
     user_question = st.text_input("Ask a technical question about Crustdata's APIs:")
     if st.button("Submit"):
         if not user_question:
@@ -173,12 +168,8 @@ def main():
             return
 
         response = bot.get_response(user_question)
-        st.session_state.chat_history.append({
-            'human': user_question,
-            'AI': response
-        })
+        st.session_state.chat_history.append({'human': user_question, 'AI': response})
 
-    # Display chat history
     for message in st.session_state.chat_history:
         st.write("You:", message['human'])
         st.markdown(message['AI'])
