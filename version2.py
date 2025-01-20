@@ -132,7 +132,7 @@ If you're unsure about any details, acknowledge the uncertainty and suggest wher
         response = response.replace("```curl", "```bash")
         response = response.replace("api.crustdata.com", "`api.crustdata.com`")
         return response
-
+# currently the validation of the API endpoints are limitred and only set with dummy token, this is only for the testing purposes.
     def _validate_api_requests_in_response(self, response: str) -> str:
         curl_pattern = re.compile(r"```bash\s*(curl[^\n]+)\s*```", re.IGNORECASE | re.DOTALL)
         matches = curl_pattern.findall(response)
