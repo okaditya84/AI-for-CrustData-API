@@ -9,3 +9,4 @@ beautifulsoup4
 chromadb
 json5
 playwright
+langchain_google_genai

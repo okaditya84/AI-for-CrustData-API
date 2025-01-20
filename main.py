@@ -12,6 +12,7 @@ from langchain.schema import Document
 from langchain.vectorstores import FAISS
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from typing import List
+import random
 
 # Constants
 TEXT_FILES_FOLDER = "text_files"
@@ -158,24 +159,36 @@ def store_chat_history(chat_history):
         json.dump(data, f, indent=2)
 
 def main():
-    st.set_page_config(page_title="Crustdata Chat Support", layout="centered")
-    st.title("Crustdata API Support - Chat Mode")
+
+    st.set_page_config(page_title="Crustdata Chat Support 🎉", layout="centered")
+    st.title("Crustdata API Support 🤖")
+
+    # A few fun facts or tips
+    tips = [
+        "Did you know Crustdata powers data queries at lightning speed? ⚡",
+        "Check out the Crustdata developer docs for hidden endpoints! 📖",
+        "Use the conversation memory feature for back-to-back API calls! 🧠"
+    ]
+
+    st.markdown("Welcome! Ask about Crustdata's APIs, and enjoy some fun features below. 🥳")
 
     bot = CrustdataBot()
 
     if 'chat_history' not in st.session_state:
         st.session_state.chat_history = []
 
-    # Buttons for new features
-    if st.button("Clear Chat History"):
+    if st.button("Show a Random Tip 💡"):
+        st.success(random.choice(tips))
+
+    if st.button("Clear Chat History 🗑️"):
         store_chat_history(st.session_state.chat_history)
         st.session_state.chat_history = []
 
-    if st.button("Start New Chat"):
+    if st.button("Start New Chat 🌀"):
         store_chat_history(st.session_state.chat_history)
         st.session_state.chat_history = []
-        # Optionally re-initialize bot if needed
         bot.memory.clear()
+        st.balloons()
 
     user_input = st.chat_input("Ask something about Crustdata's APIs...")
     if user_input:
